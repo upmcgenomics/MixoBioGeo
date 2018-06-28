@@ -1,0 +1,188 @@
+---
+title: "Maps of mixotrophic protists abundance"
+output: html_notebook
+---
+
+
+```{r}
+#########    I Packages and data importation    #########
+
+library(ggplot2)
+theme_set(theme_minimal()) 
+library(data.table)
+library(vegan)
+library(devtools)
+library(mixOmics)
+library(FactoMineR)
+library(pastecs)
+library(gridExtra)
+library(rgdal)
+library(ggrepel)
+library(maps)
+source("http://peterhaschke.com/Code/multiplot.R")
+
+```
+
+```{r}
+#########    II Data importation and preparation ###########
+
+tabmixo = read.table("PathTo/TabMixo_Faure_et_al_2018.txt", sep = " ", header = T)
+mixotype = read.table("PathTo/Mixotype_Faure_et_al_2018.txt", sep = " ")
+
+# Here we want to make a map of abundance, not separating either by filter or by depth, but by mixotype
+esncm_map = tabmixo[, which(mixotype[,1] == "eSNCM")]
+esncm_map = rowSums(esncm_map)
+cm_map = tabmixo[, which(mixotype[,1] == "CM")]
+cm_map = rowSums(cm_map)
+gncm_map = tabmixo[, which(mixotype[,1] == "GNCM")]
+gncm_map = rowSums(gncm_map)
+psncm_map = tabmixo[, which(mixotype[,1] == "pSNCM")]
+psncm_map = rowSums(psncm_map)
+
+data_map = data.frame(eSNCM = esncm_map, pSNCM = psncm_map, GNCM = gncm_map, CM = cm_map)
+data_map$Station = substr(rownames(data_map),1,8)
+nr = length(unique(data_map$Station))
+data_map2 = data.frame(eSNCM = c(0), pSNCM = c(0), GNCM = c(0), CM = c(0), station = c(0))
+for (i in c(1:nr)) {
+  sta = unique(data_map$Station)[i]
+  temp = data_map[which(data_map$Station == sta),1:4]
+  if (nrow(temp)>1) {
+      temp = as.data.frame(sapply(temp,as.numeric))
+      temp = as.numeric(colSums(temp))
+  }
+  temp = c(temp,sta)
+  data_map2[i,] = temp
+  rm(temp)
+}
+data_map = data_map2
+rm(data_map2)
+
+rownames(data_map) = data_map$station
+data_map = data_map[,-5]
+
+#Now we want to get the lon and lat for each station
+envi=read.table("/home/faure/Documents/Stage/OK_2_finaux/tabenvi.csv", header=TRUE)
+envi = envi[,1:2]
+envi$station = substr(rownames(envi), 1,8) #Tara_own is a bug
+envi = envi[-which(envi$station == "TARA_own"),]
+envi_map = data.frame(latitude = c(0), longitude = c(0), station = c(0))
+
+for (i in c(1:length(unique(envi$station)))) {
+  sta = unique(envi$station)[i]
+  temp = envi[which(envi$station == sta),]
+  if (nrow(temp)>1) {
+   temp_med = temp[1,]
+   temp_med[,1] = mean(temp[,1], na.rm = TRUE)
+   temp_med[,2] = mean(temp[,2], na.rm = TRUE)
+   temp = temp_med
+  }
+  envi_map[i,] = temp
+  rm(temp)
+}
+rm(i)
+
+rownames(envi_map) = envi_map$station
+envi_map = envi_map[,-3]
+
+map = merge(envi_map,data_map, by = "row.names")
+rownames(map) = map$Row.names
+map = map[,-1]
+summary(map)
+map = as.data.frame(sapply(map, as.numeric))
+
+
+mean(map$CM)
+#Now we want to ponderate the read counts for each station :
+total = rowSums(map[,3:6]) #This is the total number of reads belonging to mixotrophic organisms at each station
+map$eSNCM = map$eSNCM/total
+map$CM = map$CM/total
+map$GNCM = map$GNCM/total
+map$pSNCM = map$pSNCM/total
+
+```
+
+
+```{r}
+########### IMPORT LONGHURST AND CREATE BACKGROUND ###########
+
+# Download longhurst zones shape file from http://marineregions.org/sources.php
+mysf <- readOGR(dsn = path.expand("/home/faure/Documents/PhD/Datasets/Longhurst/longhurst_v4_2010"), layer ="Longhurst_world_v4_2010")
+
+# Plot empty map
+world <- map_data('world')
+base <- ggplot(world, aes(long,lat)) + geom_map(map=world,aes(map_id=region), fill="grey", color="grey") +
+  coord_quickmap() +
+  theme_void()
+
+base_longhurst <- base + geom_path(data = mysf, 
+            aes(x = long, y = lat, group = group),
+            color = 'grey', size = .2) +
+  coord_quickmap() +
+  theme_void()
+
+```
+
+
+```{r}
+####################### PLOTS ##########################
+
+epres=rep("Present", nrow(map))
+summary(map$eSNCM*total)
+densityplot(map$eSNCM*total)
+epres[which(map$eSNCM*total<100)]=rep("Questionable",length(epres[which(map$eSNCM<5)]))
+epres[which(map$eSNCM==0)]=rep("Absent",length(epres[which(map$eSNCM==0)]))
+mape = base_longhurst +  geom_point(data=map, aes(x = longitude, y = latitude, size = eSNCM*100, col=epres), alpha = 0.85) +
+  scale_color_manual(values=c("#006699","#FFCC66")) +
+  scale_size_continuous(limits = c(0,100) ,breaks = c(0,50,70,90,100), range = c(1,4)) +
+  ggtitle(paste("Distribution of the eSNCM", sep=" ")) +
+  labs(x = "Longitude",y = "Latitude", size = "Part of the mixotrophic community (%)", col = "Presence")+
+  theme(legend.position = "right", legend.box = "horizontal")+
+  guides(size = guide_legend(title = NULL, reverse = TRUE))
+
+
+ppres=rep("Present", nrow(map))
+densityplot(map$pSNCM*total)
+summary(map$pSNCM*total)
+ppres[which(map$pSNCM*total<100)]=rep("Questionable",length(ppres[which(map$pSNCM<5)]))
+ppres[which(map$pSNCM==0)]=rep("Absent",length(ppres[which(map$pSNCM==0)]))
+mapp = base_longhurst +  geom_point(data=map, aes(x = longitude, y = latitude, size = pSNCM*100, col=ppres), alpha = 0.85) +
+  scale_color_manual(values=c("red","#006699","#FFCC66")) +
+  scale_size_continuous(limits = c(0,30) ,breaks = c(0,5,15,25,30), range = c(1,4)) +
+  ggtitle(paste("Distribution of the pSNCM", sep=" ")) +
+  labs(x = "Longitude",y = "Latitude", size = "Abundance", col = "Presence")+
+  theme(legend.position = "right", legend.box = "horizontal") +
+  guides(size = guide_legend(title = NULL, reverse = TRUE))
+
+gpres=rep("Present", nrow(map))
+summary(map$GNCM*total)
+gpres[which(map$GNCM*total<100)]=rep("Questionable",length(gpres[which(map$GNCM<5)]))
+gpres[which(map$GNCM==0)]=rep("Absent",length(gpres[which(map$GNCM==0)]))
+mapg = base_longhurst +  geom_point(data=map, aes(x = longitude, y = latitude, size = GNCM*100, col=gpres), alpha = 0.85) +
+  scale_color_manual(values=c("red","#006699","#FFCC66")) +
+  scale_size_continuous(limits = c(0,15) ,breaks = c(0,4,8,12,15), range = c(1,4)) +
+  ggtitle(paste("Distribution of the GNCM", sep=" ")) +
+  labs(x = "Longitude",y = "Latitude", size = "Abundance", col = "Presence")+
+  theme(legend.position = "right", legend.box = "horizontal") +
+  guides(size = guide_legend(title = NULL, reverse = TRUE))
+
+cpres=rep("Present", nrow(map))
+densityplot(map$CM*total)
+summary(map$CM*total)
+cpres[which(map$CM*total<100)]=rep("Questionable",length(cpres[which(map$CM<5)]))
+cpres[which(map$CM==0)]=rep("Absent",length(cpres[which(map$CM==0)]))
+mapc = base_longhurst +  geom_point(data=map, aes(x = longitude, y = latitude, size = CM*100, col=cpres), alpha = 0.85) +
+  scale_color_manual(values=c("#006699","#FFCC66")) +
+  scale_size_continuous(limits = c(0,100) ,breaks = c(0,20,40,60,80), range = c(1,4)) +
+  ggtitle(paste("Distribution of the CM", sep=" ")) +
+  labs(x = "Longitude",y = "Latitude", size = "Abundance", col = "Presence")+
+  theme(legend.position = "right", legend.box = "horizontal") +
+  guides(size = guide_legend(title = NULL, reverse = TRUE))
+
+
+mapc
+mape
+mapg
+mapp
+
+```
+

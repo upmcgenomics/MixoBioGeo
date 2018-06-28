@@ -1,0 +1,111 @@
+---
+title: "Bubble plot with abundance occupancy and evenness of mixotrophic lineages from Tara Ocean"
+output: html_notebook
+---
+
+```{r}
+#########    I Packages and data importation    #########
+
+library(ggplot2)
+theme_set(theme_minimal()) 
+library(data.table)
+library(vegan)
+library(devtools)
+library(mixOmics)
+library(FactoMineR)
+library(pastecs)
+library(gridExtra)
+library(maps)
+library(ggExtra)
+library(Rtsne)
+library(xtable)
+library(ggpubr)
+source("http://peterhaschke.com/Code/multiplot.R")
+
+```
+
+```{r}
+
+#########    II Data importation ###########
+
+tabmixo = read.table("PathTo/TabMixo_Faure_et_al_2018.txt", sep = " ", header = T)
+mixotype = read.table("PathTo/Mixotype_Faure_et_al_2018.txt", sep = " ")
+envi=read.table("PathTo/Envi_context_Faure_et_al_2018.txt", sep = " ", header=T)
+
+```
+
+```{r}
+#######    III evenness, occupancy, abundance
+
+#Now we want to sum abundances for every stations
+station = unique(substr(rownames(tabmixo),1,8))
+mixo.sta = tabmixo[1,] #creation of data table of the right dimensions
+
+for (i in c(1:length(station))) {
+  sta = station[i]
+  temp = tabmixo[which(substr(rownames(tabmixo),1,8) == sta),]
+  if (nrow(temp)>1) {
+      temp = as.data.frame(sapply(temp,as.numeric))
+      temp = as.numeric(colSums(temp))
+  }
+  mixo.sta[i,] = temp
+  rm(temp)
+}
+rm(i)
+rownames(mixo.sta) = station
+
+# Calculate total abundance of each lineage
+totabund = colSums(mixo.sta)
+
+# Calculate occupancy of each lineage :
+occup = colSums(decostand(mixo.sta, method = "pa"))
+sd(occup)
+
+# Calculate evenness of each lineage across stations
+mixo.staT = as.data.frame(t(mixo.sta))
+H = diversity(mixo.staT)
+S = specnumber(mixo.staT)
+mixo.even = H/log(S)
+mean(mixo.even)
+# 6 NAs because evenness couldn't be computed when presence in only 1 station
+mixo.even[is.na(mixo.even)] = rep(0,6)
+```
+
+
+```{r}
+#######    IV Creation of dataset and bubble graph
+
+bubble.data = data.frame(abundance = totabund, occupancy = occup, evenness = mixo.even)
+bubble.data = merge(bubble.data, mixotype, by = "row.names")
+row.names(bubble.data) = bubble.data[,1]
+bubble.data = bubble.data[,-1]
+summary(bubble.data)
+
+bubble = ggplot() + geom_point(data = bubble.data, aes(x = occupancy, y = evenness, size = abundance, fill = mixotype), alpha = 0.7, pch = 21, colour = "black") +
+  scale_fill_manual(values = c("forestgreen", "gold", "dodgerblue2", "coral3"), name = "Mixotype") +
+  scale_size(range=c(2,15), name = "Sequence abundance", breaks = c(1000000, 2500000, 5000000, 10000000, 20000000)) +
+  labs(x = "Occupancy", y = "Station Evenness")
+bubble
+
+bubble.names = bubble.data[which(bubble.data$abundance > sort(bubble.data$abundance, decreasing = T)[41]),]
+bubble.names = bubble.names[order(bubble.names$abundance, decreasing = T),]
+bubble.names$order = c(1:40)
+
+plotbubname = ggplot() + geom_point(data = bubble.data, aes(x = occupancy, y = evenness, size = abundance, fill = mixotype, colour = mixotype), alpha = 0.7, pch = 21) +
+  scale_fill_manual(values = c("forestgreen", "gold", "dodgerblue2", "coral3"), name = "Mixotype") +
+  scale_size(range=c(2,15), name = "Sequence abundance", breaks = c(1000000, 2500000, 5000000, 10000000, 20000000)) +
+  geom_text(data = bubble.names, aes(x = occupancy, y = evenness, label= as.character(bubble.names$order)), size = 3.5, fontface = "bold", color ="grey20") +
+  labs(x = "Station occupancy", y = "Station evenness")
+
+
+ggMarginal(plotbubname, type = "density", groupColour = T)
+
+```
+
+
+
+
+
+
+
+

@@ -1,0 +1,121 @@
+---
+title: "Maps of 2 constratedly distributed mixotrophic protists abundances"
+output: html_notebook
+---
+
+
+```{r}
+#########    I Packages and data importation    #########
+
+library(ggplot2)
+theme_set(theme_minimal()) 
+library(data.table)
+library(vegan)
+library(devtools)
+library(mixOmics)
+library(FactoMineR)
+library(pastecs)
+library(gridExtra)
+library(maps)
+source("http://peterhaschke.com/Code/multiplot.R")
+
+```
+
+```{r}
+#########    II Data importation ###########
+
+tabmixo = read.table("PathTo/TabMixo_Faure_et_al_2018.txt", sep = " ", header = T)
+mixotype = read.table("PathTo/Mixotype_Faure_et_al_2018.txt", sep = " ")
+
+#Now we want to sum abundances for every stations
+station = unique(substr(rownames(tabmixo),1,8))
+data_map = tabmixo[1,]
+
+for (i in c(1:length(station))) {
+  sta = station[i]
+  temp = tabmixo[which(substr(rownames(tabmixo),1,8) == sta),]
+  if (nrow(temp)>1) {
+      temp = as.data.frame(sapply(temp,as.numeric))
+      temp = as.numeric(colSums(temp))
+  }
+  data_map[i,] = temp
+  rm(temp)
+}
+rm(i)
+rownames(data_map) = station
+
+#Now we want to get the lon and lat for each station
+envi=read.table("/home/faure/Documents/Stage/OK_2_finaux/tabenvi.csv", header=TRUE)
+envi = envi[,1:2]
+envi$station = substr(rownames(envi), 1,8) #Tara_own is a bug
+envi = envi[-which(envi$station == "TARA_own"),]
+envi_map = data.frame(latitude = c(0), longitude = c(0), station = c(0))
+
+for (i in c(1:length(unique(envi$station)))) {
+  sta = unique(envi$station)[i]
+  temp = envi[which(envi$station == sta),]
+  if (nrow(temp)>1) {
+   temp_med = temp[1,]
+   temp_med[,1] = mean(temp[,1], na.rm = TRUE)
+   temp_med[,2] = mean(temp[,2], na.rm = TRUE)
+   temp = temp_med
+  }
+  envi_map[i,] = temp
+  rm(temp)
+}
+rm(i)
+
+rownames(envi_map) = envi_map$station
+envi_map = envi_map[,-3]
+
+map = merge(envi_map,data_map, by = "row.names")
+rownames(map) = map$Row.names
+map = map[,-1]
+summary(map)
+map = as.data.frame(sapply(map, as.numeric))
+map.hel = map[,-c(1:2,136)]
+map.hel = decostand(map.hel, method = "hellinger")
+map.hel = cbind(map[,c(1:2)],map.hel)
+
+```
+
+
+```{r}
+# Now we want to draw maps for key species of our RDA
+colnames(map)
+
+#We want to draw two contrasting species at the same time
+
+# Acanthrometridae F3 & Siphonosphaera cyathina
+datamap = map.hel[,c(1,2,76,107)]
+
+# Plot empty map
+world <- map_data('world')
+base <- ggplot(world, aes(long,lat)) + geom_map(map=world,aes(map_id=region), fill="grey", color="grey") +
+  coord_quickmap() +
+  theme_void()
+
+# Create a presence/absence vector
+pres=rep("Present", nrow(datamap))
+pres[which(datamap[,3]==0)]=rep("Absent",length(pres[which(datamap[,3]==0)]))
+                                
+carte1 = base +  geom_point(data=datamap, aes(x = longitude, y = latitude, size = datamap[,3], col = datamap[,3])) +
+  scale_colour_gradient(low = "gray93", high = "gold2") +
+  ggtitle(paste("Distribution of the Acanthometridae F3 spp. barcode", sep=" ")) +
+  theme(legend.position = "right", legend.box = "horizontal")+
+  guides(color= guide_legend(), size=guide_legend())
+                                
+carte2 = base +    geom_point(data=datamap, aes(x = longitude, y = latitude, size = datamap[,4], col = datamap[,4])) +
+  scale_colour_gradient(low = "gray93", high = "gold2") +
+  ggtitle(expression(paste("Distribution of the ", italic("Siphonosphaera cyathina")," barcode"))) +
+  theme(legend.position = "right", legend.box = "horizontal")+
+  guides(color= guide_legend(), size=guide_legend())
+
+multiplot(carte1, carte2)
+
+```
+
+
+
+
+

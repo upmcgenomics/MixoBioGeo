@@ -1,0 +1,191 @@
+---
+title: "Script for statistical analysis of Faure et al. 2018, exploring ubiquity of mixotrophy in the global ocean"
+output: html_notebook
+---
+
+```{r}
+#########    I Packages and data importation    #########
+
+library(ggplot2)
+theme_set(theme_minimal()) 
+library(data.table)
+library(vegan)
+library(devtools)
+library(mixOmics)
+library(FactoMineR)
+library(pastecs)
+library(gridExtra)
+library(maps)
+library(TeachingDemos)
+#source("http://peterhaschke.com/Code/multiplot.R")
+
+```
+
+```{r}
+#########    II Data importation and normalization ###########
+
+tabmixo = read.table("PathTo/TabMixo_Faure_et_al_2018.txt", sep = " ", header = T)
+mixotype = read.table("PathTo/Mixotype_Faure_et_al_2018.txt", sep = " ")
+envi=read.table("PathTo/Envi_context_Faure_et_al_2018.txt", sep = " ", header=T)
+
+# Transformation of abundance data by hellinger :
+tabmixo.hel = decostand(tabmixo, method = "hellinger")
+
+```
+
+
+```{r}
+#########    III Match between environmental and abundance datasets  ###########
+
+# We replace NAs of the environmental data by mean values in order to run the RDA :
+for (i in 1:ncol(envi)) {
+  envi[is.na(envi[,i]),i]=mean(envi[,i], na.rm=TRUE)
+}
+rm(i)
+summary(envi)
+
+# In abundance file each line = one sample whereas in envi each line = one station/depth couple
+# To tackle this issue, we grab a vector of stations :
+station = c(0)
+for (i in c(1:nrow(tabmixo.hel))) {
+  station[i] = substr(rownames(tabmixo.hel)[i],1,12)
+}
+station = as.data.frame(station)
+# We add to it a variable that will keep the order :
+station$ord = 1:nrow(station)
+
+# Now we merge envi to the vector of station/depth couples :
+envi.rda = merge(x = station, y = envi, by.x = "station", by.y = "row.names")
+
+#Finally, we reorganize the environmental dataset to have an order of rows matching with the abundance table :
+envi.rda = envi.rda[order(envi.rda$ord),]
+
+# envi.rda is missing Info for one sample (TARA 120 DCM)
+tabmixo.hel[station[-which(station$station %in% row.names(envi)),]$ord,] #One bugging station/depth couple, for RDA we have to get rid of it because it has no corresponding envi data
+tabmixo.hel = tabmixo.hel[-station[-which(station$station %in% row.names(envi)),]$ord,]
+
+# Now we have 658 matching lines in the two datasets, lets match the rownames
+rownames(envi.rda) = rownames(tabmixo.hel)
+
+# Now we don't need the station and ord info anymore :
+envi.rda = envi.rda[,-c(1:3)]
+
+summary(envi.rda)
+
+#Finally we add the filter info :
+envi.rda$Filter = as.factor(substr(rownames(envi.rda), 14, 21))
+
+```
+
+```{r}
+#########    IV Selection of species using Escoufier ###########
+
+# Selection by escoufier
+
+tabmixo.sel = escouf(tabmixo.hel)
+plot(tabmixo.sel)
+tabmixo.sel$level <- 0.90 # We choose a treshold of 90%
+tabmixo.hel = extract(tabmixo.sel)
+
+# To have an idea of how many lineages from each mixotype were selected :
+summary(mixotype[which(row.names(mixotype) %in% colnames(tabmixo.hel)),])
+
+```
+
+
+```{r}
+#########    V RDA and model selection  ###########
+
+rda.mixo = rda(tabmixo.hel ~ ., envi.rda)
+
+summary(rda.mixo)
+RsquareAdj(rda.mixo)
+# Adj Rsq = 35.38%, not too bad
+# We use the ordistep function to select variables through permutation tests :
+char2seed('Faure', set=T) # Ordistep is a function involving randomness so we set a seed for reproductability
+rda.step.both = ordistep(rda(tabmixo.hel~1,data=envi.rda), scope=formula(rda.mixo), direction="both", pstep=5000)
+formula(rda.step.both)
+# rda.mixo = rda(tabmixo.hel ~ Filter + Biogeographical.province + Depth.euph.zone +
+#     Longitude + Depth + Temperature + Ammonium.5m + Season +
+#     Sunshine.duration + acCDOM + Depth.Mixed.Layer + DepthBathy +
+#     Coast_Distance + Opt.beam.att.coef.660nm + PAR.TO + Depth.Max.O2 +
+#     Part.beam.att.coef + Si + CO3 + Calcite.saturation.state +
+#     Oxygen + Salinity + HCO3 + ChlorophyllA + Season.moment +
+#     PO4 + Okubo.Weiss + Lyapunov, data=envi.rda)
+
+rda.mixo=rda(formula=formula(rda.step.both), data=envi.rda)
+summary(rda.mixo)
+RsquareAdj(rda.mixo)
+#Adj Rsq is now down to 34.89%
+
+```
+
+```{r}
+
+ #                           TRIPLOT
+
+# Sites in background
+station <- scores(rda.mixo, scaling=2)$sites
+station = as.data.frame(station)
+g1 <- ggplot() + geom_point(aes(station[,1], station[,2]), color = "grey80")+
+  xlab("RDA1 (14.96%)") +  ylab("RDA2 (9.05%)") 
+
+#scale_color_manual(values = c("#990000","#FF0000","#FFCC33","#FFFF00","#339900","#66CCFF","#003399","#FF00CC")) 
+
+# Adding segments for the species scores
+species <- scores(rda.mixo, scaling=2)$species
+species = as.data.frame(species)
+species.col = merge(species, mixotype, by="row.names")
+color.mixo <- as.character(species.col$mixotype)
+color.mixo[which(color.mixo=="CM")]="forestgreen"
+color.mixo[which(color.mixo=="pSNCM")]="coral3"
+color.mixo[which(color.mixo=="eSNCM")]="gold"
+color.mixo[which(color.mixo=="GNCM")]="dodgerblue2"
+g2 <- g1  + geom_segment(aes(xend = species.col$RDA1, yend = species.col$RDA2),x=0,y=0,arrow = arrow(length = unit(0.2,"cm")),size = 0.5, color=color.mixo) 
+
+# Adding centroids for the filter and depth factors
+filter_depth <- as.data.frame(rda.mixo$CCA$centroids[c(1:4,33:34),1:2])
+filter_depth[,3]=substr(rownames(filter_depth),6,15)
+filter_depth[1:4,3] = substr(filter_depth[1:4,3], 2, 9)
+filter_depth = within(filter_depth,V3 <- factor(V3,levels=c("0.8-5","5-20","20-180", "180-2000", "SRF", "DCM")))
+
+g3 <- g2 + geom_point(data=as.data.frame(filter_depth), aes(x=RDA1,y=RDA2, shape=filter_depth$V3), color="darkorange2", size=4) +
+  scale_shape_manual(values = c(22,23,24,25,18,20))
+
+g3 <- g3 +   geom_hline(yintercept = 0, linetype='dotted') +
+  geom_vline(xintercept = 0, linetype='dotted') +
+  labs(title="RDA") +
+  theme(plot.title=element_text(hjust=0.5))
+g3
+
+
+# Adding envi variables 
+envi.scores <- scores(rda.mixo, choices = 1:2, display="bp", scaling=2)[-c(1:30,33,36:39,56:63),1:2] # we get rid of all qualitative variables
+g4 <- g3 + geom_segment(data=as.data.frame(envi.scores),aes(xend = RDA1*1.5, yend = RDA2*1.5),x=0,y=0,size = 0.5, linetype="F1",color = 'steelblue4',arrow = arrow(length = unit(0.2,"cm"))) +
+  geom_text(aes(envi.scores[,1]*1.7, envi.scores[,2]*1.7, label=rownames(envi.scores)), color="steelblue4")
+g4
+
+
+```
+
+
+
+```{r}
+
+# We can now identify species on the RDA plot
+species.col[which(species.col$RDA2>(0.01) & species.col$mixotype=="eSNCM"),]
+species.col[which(species.col$RDA1<(-0.1) & species.col$mixotype=="CM"),]
+# This help us build a final figure with species names on long arrows
+
+# How many lineages are badly represented on the triplot :
+species.col[which(species.col$RDA1<(0.01) & species.col$RDA1>(-0.01) & species.col$RDA2<(0.01) & species.col$RDA2>(-0.01)),]
+                       
+```
+
+
+
+
+
+
+
+
